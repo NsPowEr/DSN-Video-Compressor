@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall" // <--- 1. IMPORT AGGIUNTO
 	"time"
 
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -29,6 +30,9 @@ var ffmpegWin []byte
 
 //go:embed executables/ffmpeg-mac
 var ffmpegMac []byte
+
+// Costante per nascondere la finestra su Windows
+const createNoWindow = 0x08000000
 
 // App struct
 type App struct {
@@ -112,7 +116,6 @@ func (a *App) setupFFmpeg() error {
 	}
 
 	// Percorso dove salveremo l'eseguibile temporaneo
-	// Es: /tmp/video-compressor-bin/ffmpeg
 	destPath := filepath.Join(tempDir, "video-compressor-bin", exeName)
 
 	// Crea cartella se non esiste
@@ -120,7 +123,7 @@ func (a *App) setupFFmpeg() error {
 		return err
 	}
 
-	// Controlla se il file esiste già ed è corretto (per non riscriverlo ogni volta)
+	// Controlla se il file esiste già ed è corretto
 	info, err := os.Stat(destPath)
 	if err == nil && info.Size() == int64(len(data)) {
 		a.ffmpegPath = destPath
@@ -189,12 +192,10 @@ func (a *App) formatFileSize(size int64) string {
 
 // --- METODI ESPOSTI AL FRONTEND ---
 
-// IsFFmpegInstalled ritorna sempre true perché lo includiamo noi
 func (a *App) IsFFmpegInstalled() bool {
 	return a.ffmpegPath != ""
 }
 
-// InstallFFmpeg è vuota perché non serve più scaricare nulla
 func (a *App) InstallFFmpeg() error {
 	return nil
 }
@@ -213,8 +214,6 @@ func (a *App) SelectFiles() []string {
 }
 
 func (a *App) OpenOutputFolder(path string) {
-	// Se gli passiamo un file, apriamo la cartella che lo contiene
-	// Se gli passiamo una cartella, apriamo quella
 	dirToOpen := path
 	fileInfo, err := os.Stat(path)
 	if err == nil && !fileInfo.IsDir() {
@@ -225,6 +224,10 @@ func (a *App) OpenOutputFolder(path string) {
 	switch runtime.GOOS {
 	case "windows":
 		cmd = exec.Command("explorer", dirToOpen)
+		// <--- 2. NASCONDI FINESTRA EXPLORER (Opzionale, Explorer di solito non mostra cmd)
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			CreationFlags: createNoWindow,
+		}
 	case "darwin":
 		cmd = exec.Command("open", dirToOpen)
 	default:
@@ -236,42 +239,33 @@ func (a *App) OpenOutputFolder(path string) {
 func (a *App) ConvertToMP4(inputPath string) (ConversionResult, error) {
 	result := ConversionResult{OutputPath: "", InputSize: "", OutputSize: ""}
 
-	// Controllo di sicurezza
 	if a.ffmpegPath == "" {
 		if err := a.setupFFmpeg(); err != nil {
 			return result, fmt.Errorf("FFmpeg mancante: %v", err)
 		}
 	}
 
-	// 1. Info file input
 	infoIn, err := os.Stat(inputPath)
 	if err == nil {
 		result.InputSize = a.formatFileSize(infoIn.Size())
 	}
 
-	// 2. Determina cartella di output: User/Videos/Converted
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return result, fmt.Errorf("impossibile trovare cartella utente: %v", err)
 	}
 
 	outputDir := filepath.Join(homeDir, "Videos", "Converted")
-	
-	// Crea la cartella se non esiste
+
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return result, fmt.Errorf("impossibile creare cartella output: %v", err)
 	}
 
-	// Costruisci nome file output
 	filename := filepath.Base(inputPath)
 	ext := filepath.Ext(filename)
 	baseName := filename[0 : len(filename)-len(ext)]
-	
-	// Aggiungi un timestamp o suffisso per evitare sovrascritture accidentali se necessario
-	// Qui uso solo _converted come richiesto
 	outputPath := filepath.Join(outputDir, baseName+"_converted.mp4")
 
-	// 3. Parametri conversione
 	durationSecs := a.getVideoDuration(a.ffmpegPath, inputPath)
 
 	args := []string{
@@ -281,12 +275,19 @@ func (a *App) ConvertToMP4(inputPath string) (ConversionResult, error) {
 		"-b:a", "165k",
 		"-c:v", "libx264",
 		"-c:a", "aac",
-		"-y", // Sovrascrivi se esiste già in Converted
+		"-y",
 		"-progress", "pipe:1",
 		outputPath,
 	}
 
 	cmd := exec.CommandContext(a.ctx, a.ffmpegPath, args...)
+
+	// <--- 3. NASCONDI FINESTRA FFMPEG (Cruciale)
+	if runtime.GOOS == "windows" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			CreationFlags: createNoWindow,
+		}
+	}
 
 	a.cmdLock.Lock()
 	a.runningCmds[cmd] = true
@@ -304,7 +305,6 @@ func (a *App) ConvertToMP4(inputPath string) (ConversionResult, error) {
 		return result, err
 	}
 
-	// Gestione Progress Bar
 	scanner := bufio.NewScanner(stdout)
 	var lastPercent float64 = 0
 
@@ -320,7 +320,6 @@ func (a *App) ConvertToMP4(inputPath string) (ConversionResult, error) {
 					if percent > 99 {
 						percent = 99
 					}
-					// Emetti evento solo se percentuale cambia in modo significativo per performance
 					if percent > lastPercent {
 						lastPercent = percent
 						wailsRuntime.EventsEmit(a.ctx, "conversion:progress", ProgressData{
@@ -340,7 +339,6 @@ func (a *App) ConvertToMP4(inputPath string) (ConversionResult, error) {
 		return result, fmt.Errorf("errore conversione: %v", err)
 	}
 
-	// 4. Completamento
 	wailsRuntime.EventsEmit(a.ctx, "conversion:progress", ProgressData{
 		Filename: inputPath,
 		Percent:  100,
@@ -357,6 +355,14 @@ func (a *App) ConvertToMP4(inputPath string) (ConversionResult, error) {
 
 func (a *App) getVideoDuration(ffmpegPath, inputPath string) float64 {
 	cmd := exec.Command(ffmpegPath, "-i", inputPath)
+
+	// <--- 4. NASCONDI FINESTRA ANCHE QUI (Lettura durata)
+	if runtime.GOOS == "windows" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			CreationFlags: createNoWindow,
+		}
+	}
+
 	output, _ := cmd.CombinedOutput()
 	outputStr := string(output)
 
