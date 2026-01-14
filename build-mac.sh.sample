@@ -1,0 +1,110 @@
+#!/bin/bash
+
+APP_NAME_BASE="video-compressor"
+WAILS_OUTPUT_NAME="video-compressor"
+
+ENTITLEMENTS="build/darwin/entitlements.plist"
+SIGNING_IDENTITY="Apple Development: xxxxxxxxxxxxxxxxxxxxx"
+ORIGINAL_DIR=$(pwd)
+
+echo "🧹 Pulizia cartella build..."
+rm -rf build/bin/*
+
+echo "🔨 Inizio compilazione macOS..."
+
+echo "🍎 Building for macOS (ARM64 - Apple Silicon)..."
+wails build -platform darwin/arm64
+
+if [ -d "build/bin/${WAILS_OUTPUT_NAME}.app" ]; then
+    echo "✅ Build ARM64 completata. Rinomino in ${APP_NAME_BASE}-arm64.app"
+    mv "build/bin/${WAILS_OUTPUT_NAME}.app" "build/bin/${APP_NAME_BASE}-arm64.app"
+else
+    echo "❌ Errore: build/bin/${WAILS_OUTPUT_NAME}.app non trovato dopo la compilazione ARM64."
+    ls -la build/bin/
+    exit 1
+fi
+
+echo "🍎 Building for macOS (AMD64 - Intel)..."
+wails build -platform darwin/amd64
+
+if [ -d "build/bin/${WAILS_OUTPUT_NAME}.app" ]; then
+    echo "✅ Build AMD64 completata. Rinomino in ${APP_NAME_BASE}-amd64.app"
+    mv "build/bin/${WAILS_OUTPUT_NAME}.app" "build/bin/${APP_NAME_BASE}-amd64.app"
+else
+    echo "❌ Errore: build/bin/${WAILS_OUTPUT_NAME}.app non trovato dopo la compilazione AMD64."
+    ls -la build/bin/
+    exit 1
+fi
+
+
+echo "🚀 Inizio procedura di packaging e firma..."
+
+sign_specific_app() {
+    local RELATIVE_APP_PATH="$1"
+    local ZIP_NAME="$2"  
+    local APP_FILENAME=$(basename "$RELATIVE_APP_PATH") 
+
+    if [ ! -d "$ORIGINAL_DIR/$RELATIVE_APP_PATH" ]; then
+        return
+    fi
+
+    echo "---------------------------------------------------"
+    echo "🔵 Trovata app: $APP_FILENAME"
+
+    TEMP_WORK_DIR=$(mktemp -d)
+    echo "🛡️  Sposto l'app in area sicura temporanea..."
+    cp -R "$ORIGINAL_DIR/$RELATIVE_APP_PATH" "$TEMP_WORK_DIR/"
+    local TARGET_APP_PATH="$TEMP_WORK_DIR/$APP_FILENAME"
+
+    echo "🧹 Pulizia attributi estesi..."
+    codesign --remove-signature "$TARGET_APP_PATH" 2>/dev/null
+    find "$TARGET_APP_PATH" -name ".DS_Store" -delete
+    xattr -cr "$TARGET_APP_PATH"
+
+    echo "✍️  Firmo l'applicazione..."
+    if [ -f "$ORIGINAL_DIR/$ENTITLEMENTS" ]; then
+        codesign --force --options runtime --timestamp --deep --entitlements "$ORIGINAL_DIR/$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$TARGET_APP_PATH"
+    else
+        echo "⚠️  Entitlements non trovati. Firmo senza."
+        codesign --force --options runtime --timestamp --deep --sign "$SIGNING_IDENTITY" "$TARGET_APP_PATH"
+    fi
+
+    echo "🔍 Verifico la firma..."
+    codesign --verify --deep --strict --verbose=2 "$TARGET_APP_PATH"
+    
+    if [ $? -eq 0 ]; then
+        echo "✅ Firma valida."
+        
+        echo "📦 Creo lo zip finale..."
+        /usr/bin/ditto -c -k --keepParent "$TARGET_APP_PATH" "$TEMP_WORK_DIR/${ZIP_NAME}.zip"
+        mv "$TEMP_WORK_DIR/${ZIP_NAME}.zip" "$ORIGINAL_DIR/"
+        echo "✅ Zip salvato in: $ORIGINAL_DIR/${ZIP_NAME}.zip"
+    else
+        echo "❌ Errore nella firma."
+        rm -rf "$TEMP_WORK_DIR"
+        exit 1
+    fi
+
+    rm -rf "$TEMP_WORK_DIR"
+}
+
+FOUND_ANY=false
+
+
+if [ -d "build/bin/${APP_NAME_BASE}-arm64.app" ]; then
+    FOUND_ANY=true
+    sign_specific_app "build/bin/${APP_NAME_BASE}-arm64.app" "${APP_NAME_BASE}-mac-arm64"
+fi
+
+if [ -d "build/bin/${APP_NAME_BASE}-amd64.app" ]; then
+    FOUND_ANY=true
+    sign_specific_app "build/bin/${APP_NAME_BASE}-amd64.app" "${APP_NAME_BASE}-mac-amd64"
+fi
+
+if [ "$FOUND_ANY" = false ]; then
+    echo "❌ Nessuna app trovata in build/bin/"
+    exit 1
+fi
+
+echo "---------------------------------------------------"
+echo "🎉 Procedura macOS completata."
