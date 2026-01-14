@@ -3,7 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
-	_ "embed" // Importante per incorporare i file
+	_ "embed"
 	"fmt"
 	"math"
 	"os"
@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall" // <--- 1. IMPORT AGGIUNTO
 	"time"
 
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -22,25 +21,18 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// --- EMBEDDING DEI FILE ---
-// I file devono esistere nella cartella 'executables' alla radice del progetto
-
 //go:embed executables/ffmpeg-win.exe
 var ffmpegWin []byte
 
 //go:embed executables/ffmpeg-mac
 var ffmpegMac []byte
 
-// Costante per nascondere la finestra su Windows
-const createNoWindow = 0x08000000
-
-// App struct
 type App struct {
 	ctx         context.Context
 	cmdLock     sync.Mutex
 	runningCmds map[*exec.Cmd]bool
 	stopStats   chan bool
-	ffmpegPath  string // Percorso del file estratto
+	ffmpegPath  string
 }
 
 type ProgressData struct {
@@ -68,13 +60,10 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.stopStats = make(chan bool)
-
-	// Estrae FFmpeg appena l'app si avvia
 	if err := a.setupFFmpeg(); err != nil {
 		wailsRuntime.EventsEmit(a.ctx, "error", "Errore critico FFmpeg: "+err.Error())
 		fmt.Println("Errore setup FFmpeg:", err)
 	}
-
 	go a.startSystemMonitoring()
 }
 
@@ -82,8 +71,6 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.stopStats != nil {
 		a.stopStats <- true
 	}
-
-	// Termina eventuali conversioni in corso alla chiusura
 	a.cmdLock.Lock()
 	defer a.cmdLock.Unlock()
 	for cmd := range a.runningCmds {
@@ -92,8 +79,6 @@ func (a *App) shutdown(ctx context.Context) {
 		}
 	}
 }
-
-// --- GESTIONE FFMPEG EMBEDDED ---
 
 func (a *App) setupFFmpeg() error {
 	tempDir := os.TempDir()
@@ -115,15 +100,11 @@ func (a *App) setupFFmpeg() error {
 		return fmt.Errorf("binario ffmpeg vuoto o mancante")
 	}
 
-	// Percorso dove salveremo l'eseguibile temporaneo
 	destPath := filepath.Join(tempDir, "video-compressor-bin", exeName)
-
-	// Crea cartella se non esiste
 	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 		return err
 	}
 
-	// Controlla se il file esiste già ed è corretto
 	info, err := os.Stat(destPath)
 	if err == nil && info.Size() == int64(len(data)) {
 		a.ffmpegPath = destPath
@@ -133,7 +114,6 @@ func (a *App) setupFFmpeg() error {
 		return nil
 	}
 
-	// Scrive il file su disco
 	if err := os.WriteFile(destPath, data, 0755); err != nil {
 		return fmt.Errorf("errore scrittura file: %v", err)
 	}
@@ -141,8 +121,6 @@ func (a *App) setupFFmpeg() error {
 	a.ffmpegPath = destPath
 	return nil
 }
-
-// --- MONITORAGGIO SISTEMA ---
 
 func (a *App) startSystemMonitoring() {
 	ticker := time.NewTicker(2 * time.Second)
@@ -177,28 +155,16 @@ func (a *App) formatFileSize(size int64) string {
 	suffixes[3] = "GB"
 	suffixes[4] = "TB"
 
-	if size == 0 {
-		return "0 B"
-	}
-
+	if size == 0 { return "0 B" }
 	base := math.Log(float64(size)) / math.Log(1024)
 	getSize := math.Ceil(base)
-	if getSize >= float64(len(suffixes)) {
-		getSize = float64(len(suffixes) - 1)
-	}
+	if getSize >= float64(len(suffixes)) { getSize = float64(len(suffixes) - 1) }
 	value := float64(size) / math.Pow(1024, getSize)
 	return fmt.Sprintf("%.2f %s", value, suffixes[int(getSize)])
 }
 
-// --- METODI ESPOSTI AL FRONTEND ---
-
-func (a *App) IsFFmpegInstalled() bool {
-	return a.ffmpegPath != ""
-}
-
-func (a *App) InstallFFmpeg() error {
-	return nil
-}
+func (a *App) IsFFmpegInstalled() bool { return a.ffmpegPath != "" }
+func (a *App) InstallFFmpeg() error { return nil }
 
 func (a *App) SelectFiles() []string {
 	selection, err := wailsRuntime.OpenMultipleFilesDialog(a.ctx, wailsRuntime.OpenDialogOptions{
@@ -207,9 +173,7 @@ func (a *App) SelectFiles() []string {
 			{DisplayName: "Video Files", Pattern: "*.mp4;*.mov;*.avi;*.mkv;*.flv;*.wmv;*.webm;*.mpeg;*.mpg"},
 		},
 	})
-	if err != nil {
-		return []string{}
-	}
+	if err != nil { return []string{} }
 	return selection
 }
 
@@ -224,15 +188,15 @@ func (a *App) OpenOutputFolder(path string) {
 	switch runtime.GOOS {
 	case "windows":
 		cmd = exec.Command("explorer", dirToOpen)
-		// <--- 2. NASCONDI FINESTRA EXPLORER (Opzionale, Explorer di solito non mostra cmd)
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			CreationFlags: createNoWindow,
-		}
 	case "darwin":
 		cmd = exec.Command("open", dirToOpen)
 	default:
 		return
 	}
+	
+	// RICHIAMA LA FUNZIONE SPECIFICA PER OS
+	a.configureCmd(cmd)
+	
 	cmd.Run()
 }
 
@@ -256,7 +220,6 @@ func (a *App) ConvertToMP4(inputPath string) (ConversionResult, error) {
 	}
 
 	outputDir := filepath.Join(homeDir, "Videos", "Converted")
-
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return result, fmt.Errorf("impossibile creare cartella output: %v", err)
 	}
@@ -282,12 +245,8 @@ func (a *App) ConvertToMP4(inputPath string) (ConversionResult, error) {
 
 	cmd := exec.CommandContext(a.ctx, a.ffmpegPath, args...)
 
-	// <--- 3. NASCONDI FINESTRA FFMPEG (Cruciale)
-	if runtime.GOOS == "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			CreationFlags: createNoWindow,
-		}
-	}
+	// RICHIAMA LA FUNZIONE SPECIFICA PER OS (Nasconde finestra su Win, non fa nulla su Mac)
+	a.configureCmd(cmd)
 
 	a.cmdLock.Lock()
 	a.runningCmds[cmd] = true
@@ -300,7 +259,6 @@ func (a *App) ConvertToMP4(inputPath string) (ConversionResult, error) {
 	}()
 
 	stdout, _ := cmd.StdoutPipe()
-
 	if err := cmd.Start(); err != nil {
 		return result, err
 	}
@@ -317,9 +275,7 @@ func (a *App) ConvertToMP4(inputPath string) (ConversionResult, error) {
 				currentSecs := currentUs / 1000000
 				if durationSecs > 0 {
 					percent := (currentSecs / durationSecs) * 100
-					if percent > 99 {
-						percent = 99
-					}
+					if percent > 99 { percent = 99 }
 					if percent > lastPercent {
 						lastPercent = percent
 						wailsRuntime.EventsEmit(a.ctx, "conversion:progress", ProgressData{
@@ -355,13 +311,9 @@ func (a *App) ConvertToMP4(inputPath string) (ConversionResult, error) {
 
 func (a *App) getVideoDuration(ffmpegPath, inputPath string) float64 {
 	cmd := exec.Command(ffmpegPath, "-i", inputPath)
-
-	// <--- 4. NASCONDI FINESTRA ANCHE QUI (Lettura durata)
-	if runtime.GOOS == "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			CreationFlags: createNoWindow,
-		}
-	}
+	
+	// RICHIAMA LA FUNZIONE SPECIFICA PER OS
+	a.configureCmd(cmd)
 
 	output, _ := cmd.CombinedOutput()
 	outputStr := string(output)
