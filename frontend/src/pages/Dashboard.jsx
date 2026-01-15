@@ -21,6 +21,19 @@ const PlayIcon = ({ className }) => (
 const PlusIcon = ({ className }) => (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
 );
+const SettingsIcon = ({ className }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+);
+
+const PRESETS = [
+    { label: "Default Profile", value: "default", category: "Standard" },
+    { label: "Gaming 1080p 30fps", value: "gaming_1080p30", category: "Gaming" },
+    { label: "Gaming 1080p 60fps", value: "gaming_1080p60", category: "Gaming" },
+    { label: "Gaming 1440p (2K) 30fps", value: "gaming_2k30", category: "Gaming" },
+    { label: "Gaming 1440p (2K) 60fps", value: "gaming_2k60", category: "Gaming" },
+    { label: "Gaming 4K 30fps", value: "gaming_4k30", category: "Gaming" },
+    { label: "Gaming 4K 60fps", value: "gaming_4k60", category: "Gaming" },
+];
 
 function Dashboard() {
     const [files, setFiles] = useState([]);
@@ -28,6 +41,7 @@ function Dashboard() {
     const [errorMessage, setErrorMessage] = useState("");
     const [cpuUsage, setCpuUsage] = useState(0);
     const [ramUsage, setRamUsage] = useState(0);
+    const [selectedPreset, setSelectedPreset] = useState("default");
 
     useEffect(() => {
         const cleanUpProgress = EventsOn("conversion:progress", (data) => {
@@ -64,8 +78,8 @@ function Dashboard() {
                     status: 'pending',
                     progress: 0,
                     outputPath: '',
-                    inputSize: '',  // Placeholder
-                    outputSize: ''  // Placeholder
+                    inputSize: '',  
+                    outputSize: ''  
                 }));
                 
                 setFiles(prev => {
@@ -91,7 +105,8 @@ function Dashboard() {
         for (const file of pendingFiles) {
             updateFileStatus(file.path, { status: 'converting' });
             try {
-                const result = await ConvertToMP4(file.path);
+                // Passiamo il selectedPreset al backend
+                const result = await ConvertToMP4(file.path, selectedPreset);
                 updateFileStatus(file.path, { 
                     status: 'done', 
                     progress: 100, 
@@ -149,7 +164,6 @@ function Dashboard() {
     };
 
     return (
-        // Modificato: h-screen e overflow-hidden per evitare scroll sulla pagina intera
         <div className="h-screen overflow-hidden bg-[#09090b] text-gray-300 font-mono p-6 flex flex-col selection:bg-purple-500/30 select-none cursor-default">
             
             {/* --- TOP BAR (Fixed) --- */}
@@ -171,6 +185,36 @@ function Dashboard() {
                         <span>CPU_USAGE: {cpuUsage}%</span>
                         <span>RAM_USAGE: {ramUsage}%</span>
                         <span>STATUS: {isConverting ? <span className="text-cyan-400">RUNNING</span> : <span className="text-emerald-500">IDLE</span>}</span>
+                    </div>
+
+                    {/* --- PRESET SELECTOR --- */}
+                    <div className="relative group">
+                        <div className="absolute inset-y-0 left-0 pl-2 flex items-center pointer-events-none">
+                            <SettingsIcon className="w-3 h-3 text-zinc-500" />
+                        </div>
+                        <select 
+                            disabled={isConverting}
+                            value={selectedPreset}
+                            onChange={(e) => setSelectedPreset(e.target.value)}
+                            className="appearance-none bg-zinc-900 text-xs font-bold text-zinc-300 border border-zinc-700 rounded pl-8 pr-8 py-2 hover:border-zinc-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/50 disabled:opacity-50 cursor-pointer w-48"
+                        >
+                            <optgroup label="Standard">
+                                <option value="default">Default Profile</option>
+                            </optgroup>
+                            <optgroup label="Gaming">
+                                <option value="gaming_1080p30">1080p 30fps</option>
+                                <option value="gaming_1080p60">1080p 60fps</option>
+                                <option value="gaming_2k30">2K 30fps</option>
+                                <option value="gaming_2k60">2K 60fps</option>
+                                <option value="gaming_4k30">4K 30fps</option>
+                                <option value="gaming_4k60">4K 60fps</option>
+                            </optgroup>
+                        </select>
+                        <div className="absolute inset-y-0 right-0 pr-2 flex items-center pointer-events-none">
+                            <svg className="h-3 w-3 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                            </svg>
+                        </div>
                     </div>
 
                     <button 
@@ -312,7 +356,7 @@ function Dashboard() {
             {/* --- FOOTER STATUS (Fixed) --- */}
             <div className="flex-none mt-2 pt-4 border-t border-zinc-900 text-[10px] text-zinc-600 flex justify-between font-mono bg-[#09090b]">
                 <span>Creato con ❤️ da DS Network</span>
-                <span>BUILD: REL_0.1.0 // CANDLE GROUP</span>
+                <span>BUILD: REL_0.2.0 // CANDLE GROUP</span>
             </div>
         </div>
     );

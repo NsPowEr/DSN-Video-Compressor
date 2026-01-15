@@ -2,6 +2,7 @@ build/bin
 node_modules
 frontend/dist
 executables/
+frontend/wailsjs
 
 *.sh
 *.zip

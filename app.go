@@ -155,16 +155,17 @@ func (a *App) formatFileSize(size int64) string {
 	suffixes[3] = "GB"
 	suffixes[4] = "TB"
 
-	if size == 0 { return "0 B" }
+	if size == 0 {
+		return "0 B"
+	}
 	base := math.Log(float64(size)) / math.Log(1024)
 	getSize := math.Ceil(base)
-	if getSize >= float64(len(suffixes)) { getSize = float64(len(suffixes) - 1) }
+	if getSize >= float64(len(suffixes)) {
+		getSize = float64(len(suffixes) - 1)
+	}
 	value := float64(size) / math.Pow(1024, getSize)
 	return fmt.Sprintf("%.2f %s", value, suffixes[int(getSize)])
 }
-
-func (a *App) IsFFmpegInstalled() bool { return a.ffmpegPath != "" }
-func (a *App) InstallFFmpeg() error { return nil }
 
 func (a *App) SelectFiles() []string {
 	selection, err := wailsRuntime.OpenMultipleFilesDialog(a.ctx, wailsRuntime.OpenDialogOptions{
@@ -173,7 +174,9 @@ func (a *App) SelectFiles() []string {
 			{DisplayName: "Video Files", Pattern: "*.mp4;*.mov;*.avi;*.mkv;*.flv;*.wmv;*.webm;*.mpeg;*.mpg"},
 		},
 	})
-	if err != nil { return []string{} }
+	if err != nil {
+		return []string{}
+	}
 	return selection
 }
 
@@ -193,14 +196,15 @@ func (a *App) OpenOutputFolder(path string) {
 	default:
 		return
 	}
-	
+
 	// RICHIAMA LA FUNZIONE SPECIFICA PER OS
 	a.configureCmd(cmd)
-	
+
 	cmd.Run()
 }
 
-func (a *App) ConvertToMP4(inputPath string) (ConversionResult, error) {
+// ConvertToMP4 accetta ora un parametro 'preset'
+func (a *App) ConvertToMP4(inputPath string, preset string) (ConversionResult, error) {
 	result := ConversionResult{OutputPath: "", InputSize: "", OutputSize: ""}
 
 	if a.ffmpegPath == "" {
@@ -227,25 +231,79 @@ func (a *App) ConvertToMP4(inputPath string) (ConversionResult, error) {
 	filename := filepath.Base(inputPath)
 	ext := filepath.Ext(filename)
 	baseName := filename[0 : len(filename)-len(ext)]
-	outputPath := filepath.Join(outputDir, baseName+"_converted.mp4")
+	// Aggiunge il preset al nome file per chiarezza, opzionale
+	outputPath := filepath.Join(outputDir, baseName+"_"+preset+".mp4")
 
 	durationSecs := a.getVideoDuration(a.ffmpegPath, inputPath)
 
+	// Configurazione Base Default
+	videoBitrate := "2527k"
+	audioBitrate := "165k"
+	fps := "30"
+	scaleFilter := "" // vuoto significa risoluzione originale
+
+	// Logica Preset
+	switch preset {
+	case "gaming_1080p30":
+		videoBitrate = "5000k"
+		audioBitrate = "192k"
+		fps = "30"
+		scaleFilter = "scale=1920:-2" // -2 mantiene aspect ratio e assicura divisibilità per 2
+	case "gaming_1080p60":
+		videoBitrate = "8000k"
+		audioBitrate = "192k"
+		fps = "60"
+		scaleFilter = "scale=1920:-2"
+	case "gaming_2k30":
+		videoBitrate = "12000k"
+		audioBitrate = "256k"
+		fps = "30"
+		scaleFilter = "scale=2560:-2"
+	case "gaming_2k60":
+		videoBitrate = "18000k"
+		audioBitrate = "256k"
+		fps = "60"
+		scaleFilter = "scale=2560:-2"
+	case "gaming_4k30":
+		videoBitrate = "25000k"
+		audioBitrate = "320k"
+		fps = "30"
+		scaleFilter = "scale=3840:-2"
+	case "gaming_4k60":
+		videoBitrate = "40000k"
+		audioBitrate = "320k"
+		fps = "60"
+		scaleFilter = "scale=3840:-2"
+	case "default":
+		// Mantiene i valori di default definiti sopra
+	default:
+		// Fallback a default se stringa sconosciuta
+	}
+
+	// Costruzione argomenti FFmpeg
 	args := []string{
 		"-i", inputPath,
-		"-b:v", "2527k",
-		"-r", "30",
-		"-b:a", "165k",
+		"-b:v", videoBitrate,
+		"-r", fps,
+		"-b:a", audioBitrate,
 		"-c:v", "libx264",
 		"-c:a", "aac",
+	}
+
+	// Aggiungi filtro scala solo se necessario
+	if scaleFilter != "" {
+		args = append(args, "-vf", scaleFilter)
+	}
+
+	args = append(args,
 		"-y",
 		"-progress", "pipe:1",
 		outputPath,
-	}
+	)
 
 	cmd := exec.CommandContext(a.ctx, a.ffmpegPath, args...)
 
-	// RICHIAMA LA FUNZIONE SPECIFICA PER OS (Nasconde finestra su Win, non fa nulla su Mac)
+	// RICHIAMA LA FUNZIONE SPECIFICA PER OS
 	a.configureCmd(cmd)
 
 	a.cmdLock.Lock()
@@ -275,7 +333,9 @@ func (a *App) ConvertToMP4(inputPath string) (ConversionResult, error) {
 				currentSecs := currentUs / 1000000
 				if durationSecs > 0 {
 					percent := (currentSecs / durationSecs) * 100
-					if percent > 99 { percent = 99 }
+					if percent > 99 {
+						percent = 99
+					}
 					if percent > lastPercent {
 						lastPercent = percent
 						wailsRuntime.EventsEmit(a.ctx, "conversion:progress", ProgressData{
@@ -311,7 +371,7 @@ func (a *App) ConvertToMP4(inputPath string) (ConversionResult, error) {
 
 func (a *App) getVideoDuration(ffmpegPath, inputPath string) float64 {
 	cmd := exec.Command(ffmpegPath, "-i", inputPath)
-	
+
 	// RICHIAMA LA FUNZIONE SPECIFICA PER OS
 	a.configureCmd(cmd)
 
